@@ -113,35 +113,55 @@ jobs:
         working-directory: openwrt
         run: ./scripts/feeds update -a && ./scripts/feeds install -a
 
-      - name: 确保 .config 配置生效（生成缺失配置）(Ensure .config is valid)
+     - name: 检查是否已存在 .config（可选提示）
         working-directory: openwrt
         run: |
-          # 若 .config 存在，自动填充缺失的配置项（使用默认值）
           if [ -f .config ]; then
-            make defconfig  # 关键命令：自动补全 .config 缺失配置，确保编译可正常执行
-            echo "✅ .config 配置已补全，可正常编译"
-            cat .config | grep -E "^CONFIG_TARGET_|^CONFIG_PACKAGE_" | head -20  # 打印部分关键配置确认
+            echo "⚠️  检测到仓库中已存在 .config 文件"
+            echo "💡 SSH 连接后可直接使用，或通过 make menuconfig 修改"
           else
-            echo "❌ 未找到 .config 文件，将使用默认配置"
-            make defconfig  # 生成默认配置
+            echo "ℹ️  仓库中未找到 .config 文件"
+            echo "💡 SSH 连接后需手动生成：cd openwrt && make menuconfig（修改后保存退出）"
           fi
 
-      - name: 使用 SSH 连接编译环境（限时 10 分钟），可修改 .config，超时后自动继续 (Connect via SSH, 10min timeout)
+      - name: SSH 手动生成 .config（限时10分钟，未生成则终止）
         if: ${{ github.event.inputs.ssh == true }}
         uses: csexton/debugger-action@master
         with:
-          timeout: 600  # 10 分钟超时
+          timeout: 600  # 10分钟超时（单位：秒）
           command: |
-            echo "🔧 当前目录：$(pwd)"
-            echo "📁 .config 路径：openwrt/.config"
-            echo "💡 可修改 .config 后保存，超时后自动继续编译流程"
-            echo "💡 示例：cd openwrt && make menuconfig（图形化修改），修改后保存退出即可"
+            echo "🔧 当前工作目录：$(pwd)"
+            echo "📂 OpenWRT 目录：openwrt"
+            echo "⏰ 倒计时10分钟，需在此时间内完成 .config 生成！"
+            echo "📝 生成步骤："
+            echo "  1. 执行：cd openwrt"
+            echo "  2. 执行：make menuconfig（图形化配置界面）"
+            echo "  3. 配置完成后，按 Esc 键 → 选择 Save → 确认保存路径为 .config → 选择 Exit"
+            echo "  4. 确认 .config 生成：ls -l .config（若显示文件则成功）"
+            echo "❌ 超时未生成 .config 将直接终止编译流程"
+            # 循环检查 .config 是否生成，每30秒提示一次剩余时间
+            end_time=$((SECONDS + 600))
+            while [ $SECONDS -lt $end_time ]; do
+              remaining=$((end_time - SECONDS))
+              echo "⌛ 剩余时间：$((remaining/60))分$((remaining%60))秒（按 Ctrl+C 可退出循环，保持连接）"
+              if [ -f "openwrt/.config" ]; then
+                echo "✅ 检测到 .config 已生成，等待 SSH 连接超时或手动断开后继续编译"
+                break
+              fi
+              sleep 30
+            done
 
-      - name: 再次确保 .config 有效性（兼容 SSH 手动修改）(Re-validate .config after SSH)
+      - name: 验证 .config 是否生成（未生成则终止）
         working-directory: openwrt
         run: |
-          make defconfig  # 再次补全配置，确保 SSH 手动修改后配置仍有效
-          echo "✅ 最终 .config 配置已确认，开始下载依赖"
+          if [ -f .config ]; then
+            echo "✅ .config 文件验证通过！"
+            echo "🔍 部分关键配置预览："
+            cat .config | grep -E "^CONFIG_TARGET_|^CONFIG_PACKAGE_" | head -20
+          else
+            echo "❌ 10分钟内未生成 .config 文件，终止编译流程"
+            exit 1  # 退出码1触发工作流失败，终止后续步骤
+          fi
 
       - name: 全线程下载依赖 (Download openwrt with full threads)
         working-directory: openwrt
