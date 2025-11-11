@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       repo_choice:
-        description: "选择要编译的 openwrt 仓库 (Choose openwrt repo to build)"
+        description: "选择要编译的 openwrt 仓库"
         type: choice
         required: true
         default: "openwrt/openwrt"  # 默认仓库
@@ -13,14 +13,14 @@ on:
           - "coolsnowwolf/lede"      # 常用社区仓库
           - "Lienol/openwrt"         # 另一热门社区仓库
       branch:
-        description: "openwrt 仓库的分支 (Branch of openwrt repo)"
+        description: "openwrt 仓库的分支"
         type: string
         required: true
         default: "openwrt-24.10"
       ssh:
-        description: "使用 ssh 连接到编译环境 (Connect to the build environment using ssh)"
+        description: 
         type: boolean
-        default: true  # 默认开启 SSH 连接
+        default: true
 
 jobs:
   build:
