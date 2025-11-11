@@ -1,36 +1,158 @@
-# This is a basic workflow to help you get started with Actions
+name: 🚀 编译 openwrt(Build openwrt)
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      repo_choice:
+        description: "选择要编译的 openwrt 仓库 (Choose openwrt repo to build)"
+        type: choice
+        required: true
+        default: "openwrt/openwrt"  # 默认仓库
+        options:
+          - "openwrt/openwrt"        # 官方仓库
+          - "coolsnowwolf/lede"      # 常用社区仓库
+          - "Lienol/openwrt"         # 另一热门社区仓库
+      branch:
+        description: "openwrt 仓库的分支 (Branch of openwrt repo)"
+        type: string
+        required: true
+        default: "openwrt-24.10"
+      ssh:
+        description: "使用 ssh 连接到编译环境 (Connect to the build environment using ssh)"
+        type: boolean
+        default: true  # 默认开启 SSH 连接
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    name: 🚀 编译 (Build)
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Before freeing up disk space
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          echo "Before freeing up disk space"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+
+      - name: "Optimize Disk Space"
+        uses: "hugoalh/disk-space-optimizer-ghaction@v0.8.1"
+        with:
+          operate_sudo: "True"
+          general_include: ".+"
+          general_exclude: |-
+            ^GCC$
+            ^G\+\+$
+            Clang
+            LLVM
+          docker_include: ".+"
+          docker_prune: "True"
+          docker_clean: "True"
+          apt_prune: "True"
+          apt_clean: "True"
+          homebrew_prune: "True"
+          homebrew_clean: "True"
+          npm_prune: "True"
+          npm_clean: "True"
+          os_swap: "True"
+
+      - name: Freeing up disk space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 3072
+          swap-size-mb: 1
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+
+      - name: Free up disk space complete
+        run: |
+          echo "Free up disk space complete"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+
+      - name: 下载编译所需的依赖 (Install the software packages required for compilation)
+        run: |
+          sudo apt update
+          sudo apt full-upgrade -y
+          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+
+      - name: 克隆当前仓库 (Clone current repo)
+        uses: actions/checkout@v4
+
+      - name: 解析仓库信息 (Parse repo owner and name)
+        id: parse_repo
+        run: |
+          # 从选择的仓库字符串中拆分 owner 和 repo （格式：owner/repo）
+          REPO_CHOICE="${{ github.event.inputs.repo_choice }}"
+          OWNER=$(echo "$REPO_CHOICE" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$REPO_CHOICE" | cut -d'/' -f2)
+          echo "OWNER=$OWNER" >> $GITHUB_ENV
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+          echo "✅ 已选择仓库：$REPO_CHOICE（Owner: $OWNER, Repo: $REPO_NAME）"
+
+      - name: 克隆选择的 openwrt 仓库 (Clone selected openwrt repo)
+        uses: actions/checkout@v4
+        with:
+          repository: "${{ env.OWNER }}/${{ env.REPO_NAME }}"  # 使用解析后的 owner 和 repo 名称
+          ref: ${{ github.event.inputs.branch }}
+          path: openwrt
+
+      - name: 复制当前仓库的配置文件到 openwrt 仓库 (Copy current repo config to openwrt repo)
+        run: cp -f diy.sh openwrt/
+
+      - name: 运行 diy.sh (Run diy.sh)
+        working-directory: openwrt
+        run: |
+          chmod +x diy.sh
+          ./diy.sh
+
+      - name: 更新并下载 feeds (Update and download feeds)
+        working-directory: openwrt
+        run: ./scripts/feeds update -a && ./scripts/feeds install -a
+
+      - name: 确保 .config 配置生效（生成缺失配置）(Ensure .config is valid)
+        working-directory: openwrt
+        run: |
+          # 若 .config 存在，自动填充缺失的配置项（使用默认值）
+          if [ -f .config ]; then
+            make defconfig  # 关键命令：自动补全 .config 缺失配置，确保编译可正常执行
+            echo "✅ .config 配置已补全，可正常编译"
+            cat .config | grep -E "^CONFIG_TARGET_|^CONFIG_PACKAGE_" | head -20  # 打印部分关键配置确认
+          else
+            echo "❌ 未找到 .config 文件，将使用默认配置"
+            make defconfig  # 生成默认配置
+          fi
+
+      - name: 使用 SSH 连接编译环境（限时 10 分钟），可修改 .config，超时后自动继续 (Connect via SSH, 10min timeout)
+        if: ${{ github.event.inputs.ssh == true }}
+        uses: csexton/debugger-action@master
+        with:
+          timeout: 600  # 10 分钟超时
+          command: |
+            echo "🔧 当前目录：$(pwd)"
+            echo "📁 .config 路径：openwrt/.config"
+            echo "💡 可修改 .config 后保存，超时后自动继续编译流程"
+            echo "💡 示例：cd openwrt && make menuconfig（图形化修改），修改后保存退出即可"
+
+      - name: 再次确保 .config 有效性（兼容 SSH 手动修改）(Re-validate .config after SSH)
+        working-directory: openwrt
+        run: |
+          make defconfig  # 再次补全配置，确保 SSH 手动修改后配置仍有效
+          echo "✅ 最终 .config 配置已确认，开始下载依赖"
+
+      - name: 全线程下载依赖 (Download openwrt with full threads)
+        working-directory: openwrt
+        run: make download -j$(nproc)
+
+      - name: 全线程编译 openwrt (Build openwrt with full threads)
+        working-directory: openwrt
+        run: make -j$(nproc) V=s
+
+      - name: 上传编译结果到 Artifact (Upload build result to Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-build-result-${{ github.event.inputs.repo_choice }}-${{ github.event.inputs.branch }}
+          path: openwrt/bin/targets
